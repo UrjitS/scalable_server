@@ -29,4 +29,7 @@ The compiler can be specified by passing one of the following to cmake:
 ### Limitations
 
 ## Examples
-./scalable_server -c 127.0.0.1 < a.txt
+./scalable_server IP_ADDRESS s|c|p
+s -> 1 to 1 server
+c -> client 
+p -> poll server
