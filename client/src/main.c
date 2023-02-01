@@ -11,7 +11,7 @@
 
 int main(int argc, char *argv[])
 {
-    int sockfd;
+    int socket_fd;
     struct sockaddr_in server_addr;
     char buffer[BUF_SIZE];
 
@@ -21,9 +21,9 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    socket_fd = socket(AF_INET, SOCK_STREAM, 0);
 
-    if (sockfd < 0)
+    if (socket_fd < 0)
     {
         perror("socket");
         return EXIT_FAILURE;
@@ -39,7 +39,7 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    if (connect(sockfd, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0)
+    if (connect(socket_fd, (struct sockaddr *) &server_addr, sizeof(server_addr)) < 0)
     {
         perror("connect");
         return EXIT_FAILURE;
@@ -49,7 +49,7 @@ int main(int argc, char *argv[])
 
     while(fgets(buffer, BUF_SIZE, stdin) != NULL)
     {
-        ssize_t n = send(sockfd, buffer, strlen(buffer), 0);
+        ssize_t n = send(socket_fd, buffer, strlen(buffer), 0);
 
         if (n < 0)
         {
@@ -60,19 +60,19 @@ int main(int argc, char *argv[])
         printf("Written to server\n");
         write(STDOUT_FILENO, buffer, n);
 
-        ssize_t m = recv(sockfd, buffer, BUF_SIZE, 0);
+        uint16_t read_number;
+        ssize_t m = recv(socket_fd, &read_number, BUF_SIZE, 0);
 
         if (m < 0)
         {
             perror("recv");
             return EXIT_FAILURE;
         }
-
-        buffer[m] = '\0';
-        printf("Server: %s", buffer);
+        read_number = ntohs(read_number);
+        printf("Server Read: %d", read_number);
     }
 
-    close(sockfd);
+    close(socket_fd);
 
     return EXIT_SUCCESS;
 }

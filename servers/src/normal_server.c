@@ -140,14 +140,12 @@ static void read_client_message(struct dc_env * env, struct dc_error * error, in
         return;
     }
 
-    printf("N read %zd \n", number_read);
-    string_buffer[number_read] = '\0';
+    number_read--;
+    printf("Number read from client %zd \n", number_read);
 
     // Send the number read
     uint16_t write_number = ntohs(number_read);
-    printf("Ree %d \n", write_number);
-    int ritten = dc_write(env, error, read_fd, &write_number, sizeof(write_number));
-    printf("Written %d \n", ritten);
+    dc_write(env, error, read_fd, &write_number, sizeof(write_number));
     if (dc_error_has_error(error)) {
         DC_ERROR_RAISE_USER(error, "Failed to write\n", 1);
         return;
