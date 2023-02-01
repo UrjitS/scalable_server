@@ -54,17 +54,17 @@ int run_normal_server(struct dc_env * env, struct dc_error * error, struct optio
 
     if(socket_fd == -1)
     {
-        DC_ERROR_RAISE_USER(error, "Failed to create normal server socket", -1);
+        DC_ERROR_RAISE_USER(error, "Failed to create normal server socket\n", -1);
         return close_normal_server(socket_fd);
     }
 
     // Setup and set socket options
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(opts->port_out);
+    addr.sin_port = htons(5000);
     addr.sin_addr.s_addr = inet_addr(opts->ip_address);
     if(addr.sin_addr.s_addr ==  (in_addr_t)-1)
     {
-        DC_ERROR_RAISE_USER(error, "Failed to set normal server socket_in addr", -1);
+        DC_ERROR_RAISE_USER(error, "Failed to set normal server socket_in addr\n", -1);
         return close_normal_server(socket_fd);
     }
 
@@ -76,7 +76,7 @@ int run_normal_server(struct dc_env * env, struct dc_error * error, struct optio
 
     if(bind_result == -1)
     {
-        DC_ERROR_RAISE_USER(error, "Failed to bind to socket in normal server", -1);
+        DC_ERROR_RAISE_USER(error, "Failed to bind to socket in normal server\n", -1);
         return close_normal_server(socket_fd);
     }
 
@@ -85,7 +85,7 @@ int run_normal_server(struct dc_env * env, struct dc_error * error, struct optio
 
     if(bind_result == -1)
     {
-        DC_ERROR_RAISE_USER(error, "Failed to listen on socket in normal server", -1);
+        DC_ERROR_RAISE_USER(error, "Failed to listen on socket in normal server\n", -1);
         return close_normal_server(socket_fd);
     }
 
@@ -108,7 +108,7 @@ int run_normal_server(struct dc_env * env, struct dc_error * error, struct optio
 
         if (accepted_fd == -1) {
             // Close server exit
-            DC_ERROR_RAISE_USER(error, "Failed to listen on socket in normal server", -1);
+            DC_ERROR_RAISE_USER(error, "Failed to listen on socket in normal server\n", -1);
             return close_normal_server(socket_fd);
         }
         // Get connection information
@@ -136,7 +136,7 @@ static void read_client_message(struct dc_env * env, struct dc_error * error, in
     // Read from socket fd.
     number_read = dc_read(env, error, read_fd, string_buffer, 1023);
     if (dc_error_has_error(error)) {
-        DC_ERROR_RAISE_USER(error, "Failed to read", 1);
+        DC_ERROR_RAISE_USER(error, "Failed to read\n", 1);
         return;
     }
 
@@ -145,10 +145,11 @@ static void read_client_message(struct dc_env * env, struct dc_error * error, in
 
     // Send the number read
     uint16_t write_number = ntohs(number_read);
-
-    dc_write(env, error, read_fd, &write_number, sizeof(uint16_t));
+    printf("Ree %d \n", write_number);
+    int ritten = dc_write(env, error, read_fd, &write_number, sizeof(write_number));
+    printf("Written %d \n", ritten);
     if (dc_error_has_error(error)) {
-        DC_ERROR_RAISE_USER(error, "Failed to write", 1);
+        DC_ERROR_RAISE_USER(error, "Failed to write\n", 1);
         return;
     }
 }
@@ -172,7 +173,7 @@ static void set_signal_handling(struct dc_error * error, struct sigaction *sa)
 
     if(result == -1)
     {
-        DC_ERROR_RAISE_USER(error, "Failed to set signal handler", 2);
+        DC_ERROR_RAISE_USER(error, "Failed to set signal handler\n", 2);
     }
 }
 

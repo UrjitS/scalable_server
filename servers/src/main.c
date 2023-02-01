@@ -1,4 +1,3 @@
-#include "client.h"
 #include "server.h"
 #include "util.h"
 #include <arpa/inet.h>
@@ -79,10 +78,7 @@ int main(int argc, char * argv[])
 static int run_corresponding_server(struct dc_env * env, struct dc_error * error, struct options *opts) {
     int exit_status;
 
-    if (opts->run_client) {
-        exit_status = run_client(opts);
-        return exit_status;
-    } else if (opts->run_normal_server) {
+    if (opts->run_normal_server) {
         exit_status = run_normal_server(env, error, opts);
         return exit_status;
     } else if (opts->run_poll_server) {
@@ -116,10 +112,8 @@ static void parse_arguments(struct dc_env * env, struct dc_error * error, int ar
     printf("Listening on ip address: %s \n", argv[1]);
     opts->ip_address = argv[1];
 
-    // Check to see what to server/client to run
-    if (dc_strcmp(env, argv[2], "c") == 0) {
-        opts->run_client = true;
-    } else if (dc_strcmp(env, argv[2], "s") == 0) {
+    // Check to see what server to run
+    if (dc_strcmp(env, argv[2], "s") == 0) {
         opts->run_normal_server = true;
     } else if (dc_strcmp(env, argv[2], "p") == 0) {
         opts->run_poll_server = true;

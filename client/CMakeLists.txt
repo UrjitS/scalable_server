@@ -12,8 +12,8 @@ set(SANITIZE TRUE)
 set(SOURCE_DIR ${PROJECT_SOURCE_DIR}/src)
 set(INCLUDE_DIR ${PROJECT_SOURCE_DIR}/include)
 
-set(SOURCE_LIST ${SOURCE_DIR}/main.c ${SOURCE_DIR}/client.c ${SOURCE_DIR}/util.c ${SOURCE_DIR}/normal_server.c ${SOURCE_DIR}/poll_server.c)
-set(HEADER_LIST ${INCLUDE_DIR}/client.h ${INCLUDE_DIR}/util.h ${INCLUDE_DIR}/server.h)
+set(SOURCE_LIST ${SOURCE_DIR}/main.c)
+set(HEADER_LIST )
 
 
 add_compile_definitions(_POSIX_C_SOURCE=200809L)
@@ -140,7 +140,6 @@ set(CLANG_TIDY_CHECKS "${CLANG_TIDY_CHECKS},-misc-unused-parameters")
 set(CLANG_TIDY_CHECKS "${CLANG_TIDY_CHECKS},-readability-identifier-length")
 
 if (${CMAKE_SYSTEM_NAME} MATCHES "Darwin")
-    # TODO: find a better way so this is not hard-coded
     set(CMAKE_C_CLANG_TIDY clang-tidy -extra-arg=-I/Library/Developer/CommandLineTools/usr/lib/clang/14.0.0/include -checks=${CLANG_TIDY_CHECKS};--quiet)
 else ()
     set(CMAKE_C_CLANG_TIDY clang-tidy -checks=${CLANG_TIDY_CHECKS};--quiet)
