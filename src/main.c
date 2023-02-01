@@ -1,26 +1,45 @@
 #include "client.h"
+#include "server.h"
 #include "util.h"
 #include <arpa/inet.h>
-#include <assert.h>
-#include <dc_c/dc_signal.h>
 #include <dc_c/dc_string.h>
 #include <dc_env/env.h>
 #include <dc_error/error.h>
-#include <getopt.h>
 #include <memory.h>
 #include <netinet/in.h>
-#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 #define DEFAULT_PORT 5000
 
-static void ctrl_c_handler(__attribute__((unused)) int signum);
-static void parse_arguments(struct dc_error * error, int argc, char *argv[], struct options *opts);
+/**
+ * Parse the cmd line arguments and setup the options struct.
+ * @param env Environment object.
+ * @param error Error object.
+ * @param argc Number of cmd line arguments.
+ * @param argv Cmd line arguments.
+ * @param opts Options object.
+ */
+static void parse_arguments(struct dc_env * env, struct dc_error * error, int argc, char *argv[], struct options *opts);
+/**
+ * Initializes the options object to default values.
+ * @param env Environment object.
+ * @param opts Options object.
+ */
 static void options_init(struct dc_env * env, struct options *opts);
+/**
+ * Runs the corresponding server or client based on options object.
+ * @param env Environment object.
+ * @param error Error object.
+ * @param opts Options object.
+ * @return Return status of the server/client
+ */
+static int run_corresponding_server(struct dc_env * env, struct dc_error * error, struct options *opts);
+/**
+ * Frees any dynamically allocated memory.
+ * @param error Error object.
+ */
 static void close_server(struct dc_error * error);
-
-static volatile sig_atomic_t done = false;   // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 int main(int argc, char * argv[])
 {
@@ -41,12 +60,10 @@ int main(int argc, char * argv[])
     // Initialize options struct
     options_init(env, &opts);
     // Parse cmd line arguments
-    parse_arguments(err, argc, argv, &opts);
+    parse_arguments(env, err, argc, argv, &opts);
 
     if (argc >= 1) {
-        dc_signal(env, err, SIGINT, ctrl_c_handler);
-
-        exit_status = run_client(&opts);
+        run_corresponding_server(env, err, &opts);
     }
 
     close_server(err);
@@ -59,64 +76,54 @@ int main(int argc, char * argv[])
     return exit_status;
 }
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-static void ctrl_c_handler(__attribute__((unused)) int signum)
-{
-    done = 1;
+static int run_corresponding_server(struct dc_env * env, struct dc_error * error, struct options *opts) {
+    int exit_status;
+
+    if (opts->run_client) {
+        exit_status = run_client(opts);
+        return exit_status;
+    } else if (opts->run_normal_server) {
+        exit_status = run_normal_server(env, error, opts);
+        return exit_status;
+    } else if (opts->run_poll_server) {
+        exit_status = run_poll_server(env, error, opts);
+        return exit_status;
+    }
+
+    return -1;
 }
-#pragma GCC diagnostic pop
 
 static void options_init(struct dc_env * env, struct options *opts)
 {
-
     dc_memset(env, opts, 0, sizeof(struct options));
     opts->port_out = DEFAULT_PORT;
 }
 
-static void parse_arguments(struct dc_error * error, int argc, char *argv[], struct options *opts)
+static void parse_arguments(struct dc_env * env, struct dc_error * error, int argc, char *argv[], struct options *opts)
 {
-    int c;
-
-    // Ensure flags are given in order to run
-    if (argc <= 1) {
-        DC_ERROR_RAISE_USER(error, "No Flags Given", 1);
-    }
-    while((c = getopt(argc, argv, ":c:p:")) != -1)   // NOLINT(concurrency-mt-unsafe)
-    {
-        switch(c)
-        {
-
-            case 'c':
-            {
-                if (inet_addr(optarg) == ( in_addr_t)(-1)) {
-                    DC_ERROR_RAISE_USER(error, "Invalid IP Address", 1);
-                }
-                printf("Listening on ip address: %s \n", optarg);
-                opts->ip_address = optarg;
-                break;
-            }
-            case 'p':
-            {
-                printf("Listening on port: %s \n", optarg);
-                opts->port_out = parse_port(optarg, 10); // NOLINT(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
-                break;
-            }
-            case ':':
-            {
-                DC_ERROR_RAISE_USER(error, "Option requires an operand", 1);
-            }
-            case '?':
-            {
-                DC_ERROR_RAISE_USER(error, "Unknown", 1);
-            }
-            default:
-            {
-                assert("should not get here");
-            }
-        }
+    // Ensure ip address and run flag is given in order to run
+    if (argc <= 2) {
+        DC_ERROR_RAISE_USER(error, "Please give an IP Address as first argument and the run flag as the second", 1);
+        return;
     }
 
+    // Set ip address
+    if (inet_addr(argv[1]) == ( in_addr_t)(-1)) {
+        DC_ERROR_RAISE_USER(error, "Invalid IP Address", 1);
+        return;
+    }
+
+    printf("Listening on ip address: %s \n", argv[1]);
+    opts->ip_address = argv[1];
+
+    // Check to see what to server/client to run
+    if (dc_strcmp(env, argv[2], "c") == 0) {
+        opts->run_client = true;
+    } else if (dc_strcmp(env, argv[2], "s") == 0) {
+        opts->run_normal_server = true;
+    } else if (dc_strcmp(env, argv[2], "p") == 0) {
+        opts->run_poll_server = true;
+    }
 }
 
 static void close_server(struct dc_error * error) {

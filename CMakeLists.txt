@@ -12,8 +12,9 @@ set(SANITIZE TRUE)
 set(SOURCE_DIR ${PROJECT_SOURCE_DIR}/src)
 set(INCLUDE_DIR ${PROJECT_SOURCE_DIR}/include)
 
-set(SOURCE_LIST ${SOURCE_DIR}/main.c ${SOURCE_DIR}/client.c ${SOURCE_DIR}/util.c)
-set(HEADER_LIST ${INCLUDE_DIR}/client.h ${INCLUDE_DIR}/util.h)
+set(SOURCE_LIST ${SOURCE_DIR}/main.c ${SOURCE_DIR}/client.c ${SOURCE_DIR}/util.c ${SOURCE_DIR}/normal_server.c ${SOURCE_DIR}/poll_server.c)
+set(HEADER_LIST ${INCLUDE_DIR}/client.h ${INCLUDE_DIR}/util.h ${INCLUDE_DIR}/server.h)
+
 
 add_compile_definitions(_POSIX_C_SOURCE=200809L)
 add_compile_definitions(_XOPEN_SOURCE=700)
