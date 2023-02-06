@@ -7,6 +7,7 @@
 #include <string.h>
 #include <dc_util/io.h>
 #include <time.h>
+#include "util.h"
 
 #define READ_BUFFER_SIZE 1024
 #define BACKLOG 5
@@ -36,7 +37,6 @@ static void signal_handler(__attribute__((unused)) int sig);
  * @param read_fd Socket file descriptor to read from.
  */
 static void read_client_message(struct dc_env * env, struct dc_error * error, int read_fd);
-static void open_csv(struct options *opts);
 void handle_connection(struct dc_env *env, struct dc_error *error, int socket_fd, struct options *opts);
 
 int run_normal_server(struct dc_env * env, struct dc_error * error, struct options *opts) {
@@ -136,7 +136,6 @@ void handle_connection(struct dc_env *env, struct dc_error *error, int socket_fd
     while (socket_error == 0) {
         // Get time
         clock_t handle_message_beginning = clock();
-        open_csv(opts);
 
         // Read client message and write back
         read_client_message(env, error, accepted_fd);
@@ -145,9 +144,7 @@ void handle_connection(struct dc_env *env, struct dc_error *error, int socket_fd
         // Write time taken to handle read/write
         clock_t handle_message_end = clock();
         double time_spent = ((double)(handle_message_end - handle_message_beginning) / CLOCKS_PER_SEC) * 1000;
-        fprintf(opts->csv_file, "%s,%s,%f\n", "Normal Server", "read_client_message", time_spent);
-        printf("read_client_message() took %f seconds to execute \n", time_spent);
-        fclose(opts->csv_file);
+        write_to_file(opts, "Normal Server", "read_client_message", time_spent);
     }
 
     printf("Closing %s:%d\n", accept_addr_str, accept_port);
@@ -156,12 +153,8 @@ void handle_connection(struct dc_env *env, struct dc_error *error, int socket_fd
     // Write time taken to handle connection
     clock_t end = clock();
     double time_spent = ((double)(end - beginning_connection) / CLOCKS_PER_SEC) * 1000;
-    if (!opts->csv_file) {
-        open_csv(opts);
-    }
-    fprintf(opts->csv_file, "%s,%s,%f\n", "Normal Server", "handle_connection", time_spent);
-    printf("handle_connection() took %f seconds to execute \n", time_spent);
-    fclose(opts->csv_file);
+
+    write_to_file(opts, "Normal Server", "handle_connection", time_spent);
 }
 
 static void read_client_message(struct dc_env * env, struct dc_error * error, int read_fd) {
@@ -206,10 +199,6 @@ static void set_signal_handling(struct dc_error * error, struct sigaction *sa)
     {
         DC_ERROR_RAISE_USER(error, "Failed to set signal handler\n", 2);
     }
-}
-
-static void open_csv(struct options *opts) {
-    opts->csv_file = fopen("states.csv", "a");
 }
 
 #pragma GCC diagnostic push

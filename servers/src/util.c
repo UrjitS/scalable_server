@@ -1,10 +1,10 @@
 #include "util.h"
-#include "error.h"
 #include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 
 in_port_t parse_port(const char *buff, int radix)
@@ -92,4 +92,11 @@ size_t parse_size_t(const char *buff, int radix)
     ret_val = (size_t)max;
 
     return ret_val;
+}
+
+void write_to_file(struct options *opts, const char * server_name, const     char * function_name, double time_taken) {
+    fprintf(opts->csv_file, "%s,%s,%f\n", server_name, function_name, time_taken);
+    printf("%s took %f seconds to execute \n", function_name, time_taken);
+    fclose(opts->csv_file);
+    opts->csv_file = fopen("states.csv", "a");
 }

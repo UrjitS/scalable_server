@@ -8,7 +8,6 @@
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <fcntl.h>
 
 #define DEFAULT_PORT 5000
 
