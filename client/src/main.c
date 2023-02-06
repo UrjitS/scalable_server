@@ -69,7 +69,7 @@ int main(int argc, char *argv[])
             return EXIT_FAILURE;
         }
         read_number = ntohs(read_number);
-        printf("Server Read: %d", read_number);
+        printf("Server Read: %d\n", read_number);
     }
 
     close(socket_fd);

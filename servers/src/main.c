@@ -8,6 +8,7 @@
 #include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <fcntl.h>
 
 #define DEFAULT_PORT 5000
 
@@ -99,7 +100,8 @@ static void parse_arguments(struct dc_env * env, struct dc_error * error, int ar
 {
     // Ensure ip address and run flag is given in order to run
     if (argc <= 2) {
-        DC_ERROR_RAISE_USER(error, "Please give an IP Address as first argument and the run flag as the second", 1);
+        DC_ERROR_RAISE_USER(error, "Please give an IP Address as first argument and the run flag as the second "
+                                   "(s -> normal server, p -> poll server) [t -> truncate csv file]\n", 1);
         return;
     }
 
@@ -117,6 +119,18 @@ static void parse_arguments(struct dc_env * env, struct dc_error * error, int ar
         opts->run_normal_server = true;
     } else if (dc_strcmp(env, argv[2], "p") == 0) {
         opts->run_poll_server = true;
+    }
+
+    // Optional truncate csv file
+    if (argc == 4) {
+        if (dc_strcmp(env, argv[3], "t") == 0) {
+            opts->csv_file = fopen("states.csv", "w");
+        }
+    }
+
+    // Open CSV File if not already open
+    if (!opts->csv_file) {
+        opts->csv_file = fopen("states.csv", "a");
     }
 }
 

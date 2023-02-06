@@ -3,6 +3,7 @@
 
 #include <netinet/in.h>
 #include <stdbool.h>
+#include <bits/types/FILE.h>
 
 
 struct options
@@ -12,9 +13,9 @@ struct options
      */
     char * ip_address;
     /**
-     * If to run the client
+     * File to write the server states to.
      */
-    bool run_client;
+    FILE * csv_file;
     /**
      * If to run the normal server
      */

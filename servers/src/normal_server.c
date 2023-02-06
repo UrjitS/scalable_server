@@ -6,6 +6,7 @@
 #include <dc_posix/dc_unistd.h>
 #include <string.h>
 #include <dc_util/io.h>
+#include <time.h>
 
 #define READ_BUFFER_SIZE 1024
 #define BACKLOG 5
@@ -27,7 +28,7 @@ static void set_signal_handling(struct dc_error * error, struct sigaction *sa);
  * Handle signal action.
  * @param sig Signal number.
  */
-static void signal_handler(int sig);
+static void signal_handler(__attribute__((unused)) int sig);
 /**
  * Read client messages and send back the number read.
  * @param env Environment object.
@@ -35,6 +36,8 @@ static void signal_handler(int sig);
  * @param read_fd Socket file descriptor to read from.
  */
 static void read_client_message(struct dc_env * env, struct dc_error * error, int read_fd);
+static void open_csv(struct options *opts);
+void handle_connection(struct dc_env *env, struct dc_error *error, int socket_fd, struct options *opts);
 
 int run_normal_server(struct dc_env * env, struct dc_error * error, struct options *opts) {
     // Trace this function
@@ -44,9 +47,6 @@ int run_normal_server(struct dc_env * env, struct dc_error * error, struct optio
     struct sockaddr_in addr;
     int option;
     int bind_result;
-    int accepted_fd;
-    struct sockaddr_in accept_addr;
-    socklen_t accept_addr_len;
     struct sigaction sa;
 
     // Create a socket
@@ -60,7 +60,7 @@ int run_normal_server(struct dc_env * env, struct dc_error * error, struct optio
 
     // Setup and set socket options
     addr.sin_family = AF_INET;
-    addr.sin_port = htons(5000);
+    addr.sin_port = htons(opts->port_out);
     addr.sin_addr.s_addr = inet_addr(opts->ip_address);
     if(addr.sin_addr.s_addr ==  (in_addr_t)-1)
     {
@@ -89,45 +89,79 @@ int run_normal_server(struct dc_env * env, struct dc_error * error, struct optio
         return close_normal_server(socket_fd);
     }
 
-
     set_signal_handling(error, &sa);
     running = 1;
 
     while(running)
     {
-        char * accept_addr_str;
-        in_port_t accept_port;
-        int socket_error;
-        socklen_t len = sizeof (socket_error);
 
-        printf("Setup server and awaiting connection\n");
+        handle_connection(env, error, socket_fd, opts);
 
-        // Accept connection
-        accept_addr_len = sizeof(accept_addr);
-        accepted_fd = accept(socket_fd, (struct sockaddr *)&accept_addr, &accept_addr_len);
-
-        if (accepted_fd == -1) {
-            // Close server exit
-            DC_ERROR_RAISE_USER(error, "Failed to listen on socket in normal server\n", -1);
-            return close_normal_server(socket_fd);
-        }
-        // Get connection information
-        accept_addr_str = inet_ntoa(accept_addr.sin_addr);  // NOLINT(concurrency-mt-unsafe)
-        accept_port = ntohs(accept_addr.sin_port);
-        printf("Accepted from %s:%d\n", accept_addr_str, accept_port);
-
-        // Loop until accepted connection closes
-        socket_error = 0;
-        while (socket_error == 0) {
-            read_client_message(env, error, accepted_fd);
-            getsockopt(accepted_fd, SOL_SOCKET, SO_ERROR, &socket_error, &len);
-        }
-
-        printf("Closing %s:%d\n", accept_addr_str, accept_port);
-        close(accepted_fd);
     }
 
     return 0;
+}
+
+void handle_connection(struct dc_env *env, struct dc_error *error, int socket_fd, struct options *opts)
+{
+    clock_t beginning_connection = clock();
+
+    char * accept_addr_str;
+    in_port_t accept_port;
+    struct sockaddr_in accept_addr;
+    socklen_t accept_addr_len;
+    int accepted_fd;
+    int socket_error;
+    socklen_t len = sizeof (socket_error);
+
+    printf("Setup server and awaiting connection\n");
+
+    // Accept connection
+    (accept_addr_len) = sizeof(accept_addr);
+    accepted_fd = accept(socket_fd, &accept_addr, &accept_addr_len);
+
+    if (accepted_fd == -1) {
+        // Close server exit
+        DC_ERROR_RAISE_USER(error, "Failed to listen on socket in normal server\n", -1);
+        running = close_normal_server(socket_fd);
+        return;
+    }
+    // Get connection information
+    accept_addr_str = inet_ntoa(accept_addr.sin_addr);  // NOLINT(concurrency-mt-unsafe)
+    accept_port = ntohs(accept_addr.sin_port);
+    printf("Accepted from %s:%d\n", accept_addr_str, accept_port);
+
+    // Loop until accepted connection closes
+    socket_error = 0;
+    while (socket_error == 0) {
+        // Get time
+        clock_t handle_message_beginning = clock();
+        open_csv(opts);
+
+        // Read client message and write back
+        read_client_message(env, error, accepted_fd);
+        getsockopt(accepted_fd, SOL_SOCKET, SO_ERROR, &socket_error, &len);
+
+        // Write time taken to handle read/write
+        clock_t handle_message_end = clock();
+        double time_spent = ((double)(handle_message_end - handle_message_beginning) / CLOCKS_PER_SEC) * 1000;
+        fprintf(opts->csv_file, "%s,%s,%f\n", "Normal Server", "read_client_message", time_spent);
+        printf("read_client_message() took %f seconds to execute \n", time_spent);
+        fclose(opts->csv_file);
+    }
+
+    printf("Closing %s:%d\n", accept_addr_str, accept_port);
+    close(accepted_fd);
+
+    // Write time taken to handle connection
+    clock_t end = clock();
+    double time_spent = ((double)(end - beginning_connection) / CLOCKS_PER_SEC) * 1000;
+    if (!opts->csv_file) {
+        open_csv(opts);
+    }
+    fprintf(opts->csv_file, "%s,%s,%f\n", "Normal Server", "handle_connection", time_spent);
+    printf("handle_connection() took %f seconds to execute \n", time_spent);
+    fclose(opts->csv_file);
 }
 
 static void read_client_message(struct dc_env * env, struct dc_error * error, int read_fd) {
@@ -159,7 +193,6 @@ int close_normal_server(int fd) {
     return -1;
 }
 
-
 static void set_signal_handling(struct dc_error * error, struct sigaction *sa)
 {
     int result;
@@ -175,10 +208,13 @@ static void set_signal_handling(struct dc_error * error, struct sigaction *sa)
     }
 }
 
+static void open_csv(struct options *opts) {
+    opts->csv_file = fopen("states.csv", "a");
+}
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-parameter"
-static void signal_handler(int sig)
+static void signal_handler(__attribute__((unused)) int sig)
 {
     running = 0;
 }
