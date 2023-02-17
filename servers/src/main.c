@@ -123,13 +123,13 @@ static void parse_arguments(struct dc_env * env, struct dc_error * error, int ar
     // Optional truncate csv file
     if (argc == 4) {
         if (dc_strcmp(env, argv[3], "t") == 0) {
-            opts->csv_file = fopen("states.csv", "w");
+            opts->csv_file = fopen("states.csv", "we");
         }
     }
 
     // Open CSV File if not already open
     if (!opts->csv_file) {
-        opts->csv_file = fopen("states.csv", "a");
+        opts->csv_file = fopen("states.csv", "ae");
     }
 }
 

@@ -30,7 +30,6 @@ struct options
     in_port_t port_out;
 };
 
-in_port_t parse_port(const char *buff, int radix);
-size_t parse_size_t(const char *buff, int radix);
 void write_to_file(struct options *opts, const char * server_name, const char * function_name, double time_taken);
+
 #endif //SCALABLE_SERVER_UTIL_H

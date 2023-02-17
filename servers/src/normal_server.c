@@ -6,205 +6,150 @@
 #include <dc_posix/dc_unistd.h>
 #include <string.h>
 #include <dc_util/io.h>
-#include <time.h>
 #include "util.h"
+#include <dc_c/dc_stdio.h>
+#include <dc_c/dc_string.h>
+#include <dc_env/env.h>
+#include <dc_error/error.h>
+#include <dc_posix/sys/dc_socket.h>
+#include <time.h>
 
 #define READ_BUFFER_SIZE 1024
 #define BACKLOG 5
+
 static volatile sig_atomic_t running;   // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
-/**
- * If any error occurs, free any dynamically allocated memory.
- * @param fd Socket file descriptor.
- * @return error number -1
- */
-int close_normal_server(int fd);
-/**
- * Set a signal handler.
- * @param error Error object.
- * @param sa Sigaction object.
- */
-static void set_signal_handling(struct dc_error * error, struct sigaction *sa);
-/**
- * Handle signal action.
- * @param sig Signal number.
- */
-static void signal_handler(__attribute__((unused)) int sig);
-/**
- * Read client messages and send back the number read.
- * @param env Environment object.
- * @param error Error object.
- * @param read_fd Socket file descriptor to read from.
- */
-static void read_client_message(struct dc_env * env, struct dc_error * error, int read_fd);
-void handle_connection(struct dc_env *env, struct dc_error *error, int socket_fd, struct options *opts);
+static int setup_server(struct dc_env *env, struct dc_error *err, struct options *opts);
+void handle_connection(struct dc_env *env, struct dc_error *error, int socket_fd);
+static int handle_client_data(struct dc_env *env, struct dc_error *err, int clients);
 
 int run_normal_server(struct dc_env * env, struct dc_error * error, struct options *opts) {
     // Trace this function
     DC_TRACE(env);
 
-    int socket_fd;
-    struct sockaddr_in addr;
-    int option;
-    int bind_result;
-    struct sigaction sa;
+    int listen_fd;
 
-    // Create a socket
-    socket_fd = socket(AF_INET, SOCK_STREAM, 0);
 
-    if(socket_fd == -1)
-    {
-        DC_ERROR_RAISE_USER(error, "Failed to create normal server socket\n", -1);
-        return close_normal_server(socket_fd);
-    }
+    listen_fd = setup_server(env, error, opts);
 
-    // Setup and set socket options
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(opts->port_out);
-    addr.sin_addr.s_addr = inet_addr(opts->ip_address);
-    if(addr.sin_addr.s_addr ==  (in_addr_t)-1)
-    {
-        DC_ERROR_RAISE_USER(error, "Failed to set normal server socket_in addr\n", -1);
-        return close_normal_server(socket_fd);
-    }
-
-    option = 1;
-    setsockopt(socket_fd, SOL_SOCKET, SO_REUSEADDR, &option, sizeof(option));
-
-    // Bind to the socket
-    bind_result = bind(socket_fd, (struct sockaddr *)&addr, sizeof(struct sockaddr_in));
-
-    if(bind_result == -1)
-    {
-        DC_ERROR_RAISE_USER(error, "Failed to bind to socket in normal server\n", -1);
-        return close_normal_server(socket_fd);
-    }
-
-    // Listen on socket
-    bind_result = listen(socket_fd, BACKLOG);
-
-    if(bind_result == -1)
-    {
-        DC_ERROR_RAISE_USER(error, "Failed to listen on socket in normal server\n", -1);
-        return close_normal_server(socket_fd);
-    }
-
-    set_signal_handling(error, &sa);
     running = 1;
 
     while(running)
     {
+        // Log the time each client took to be handled
+        clock_t beginning_connection = clock();
 
-        handle_connection(env, error, socket_fd, opts);
+        handle_connection(env, error, listen_fd);
 
+        clock_t end = clock();
+        double time_spent = ((double)(end - beginning_connection) / CLOCKS_PER_SEC) * 1000;
+        write_to_file(opts, "Normal Server", "handle_connection", time_spent);
     }
 
     return 0;
 }
 
-void handle_connection(struct dc_env *env, struct dc_error *error, int socket_fd, struct options *opts)
+static int setup_server(struct dc_env *env, struct dc_error *err, struct options *opts)
 {
-    clock_t beginning_connection = clock();
+    DC_TRACE(env);
 
-    char * accept_addr_str;
-    in_port_t accept_port;
-    struct sockaddr_in accept_addr;
-    socklen_t accept_addr_len;
-    int accepted_fd;
-    int socket_error;
-    socklen_t len = sizeof (socket_error);
+    int listener;
+    int option_value;
+    struct sockaddr_in server_addr;
+
+    listener = dc_socket(env, err, AF_INET, SOCK_STREAM, 0);
+
+    if (listener < 0)
+    {
+        dc_perror(env, "socket");
+        return -1;
+    }
+
+    option_value = 1;
+    dc_setsockopt(env, err, listener, SOL_SOCKET, SO_REUSEADDR, &option_value, sizeof(option_value));
+
+    dc_memset(env, &server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = inet_addr(opts->ip_address);
+    server_addr.sin_port = htons(opts->port_out);
+
+    if(dc_bind(env, err, listener, (struct sockaddr*) &server_addr, sizeof(server_addr)) < 0)
+    {
+        dc_perror(env, "bind");
+        dc_close(env, err, listener);
+        return -1;
+    }
+
+    if(dc_listen(env, err, listener, BACKLOG) < 0)
+    {
+        dc_perror(env, "listen");
+        dc_close(env, err, listener);
+        return -1;
+    }
+
+    return listener;
+}
+
+void handle_connection(struct dc_env *env, struct dc_error *error, int socket_fd)
+{
+    DC_TRACE(env);
+
+    struct sockaddr_in client_addr;
+    socklen_t client_len;
+    int client_fd;
 
     printf("Setup server and awaiting connection\n");
 
     // Accept connection
-    (accept_addr_len) = sizeof(accept_addr);
-    accepted_fd = accept(socket_fd, &accept_addr, &accept_addr_len);
-
-    if (accepted_fd == -1) {
-        // Close server exit
-        DC_ERROR_RAISE_USER(error, "Failed to listen on socket in normal server\n", -1);
-        running = close_normal_server(socket_fd);
-        return;
-    }
-    // Get connection information
-    accept_addr_str = inet_ntoa(accept_addr.sin_addr);  // NOLINT(concurrency-mt-unsafe)
-    accept_port = ntohs(accept_addr.sin_port);
-    printf("Accepted from %s:%d\n", accept_addr_str, accept_port);
-
-    // Loop until accepted connection closes
-    socket_error = 0;
-    while (socket_error == 0) {
-        // Get time
-        clock_t handle_message_beginning = clock();
-
-        // Read client message and write back
-        read_client_message(env, error, accepted_fd);
-        getsockopt(accepted_fd, SOL_SOCKET, SO_ERROR, &socket_error, &len);
-
-        // Write time taken to handle read/write
-        clock_t handle_message_end = clock();
-        double time_spent = ((double)(handle_message_end - handle_message_beginning) / CLOCKS_PER_SEC) * 1000;
-        write_to_file(opts, "Normal Server", "read_client_message", time_spent);
-    }
-
-    printf("Closing %s:%d\n", accept_addr_str, accept_port);
-    close(accepted_fd);
-
-    // Write time taken to handle connection
-    clock_t end = clock();
-    double time_spent = ((double)(end - beginning_connection) / CLOCKS_PER_SEC) * 1000;
-
-    write_to_file(opts, "Normal Server", "handle_connection", time_spent);
-}
-
-static void read_client_message(struct dc_env * env, struct dc_error * error, int read_fd) {
-    char string_buffer[READ_BUFFER_SIZE];
-    ssize_t number_read;
-    // Read from socket fd.
-    number_read = dc_read(env, error, read_fd, string_buffer, 1023);
-    if (dc_error_has_error(error)) {
-        DC_ERROR_RAISE_USER(error, "Failed to read\n", 1);
-        return;
-    }
-
-    number_read--;
-    printf("Number read from client %zd \n", number_read);
-
-    // Send the number read
-    uint16_t write_number = ntohs(number_read);
-    dc_write(env, error, read_fd, &write_number, sizeof(write_number));
-    if (dc_error_has_error(error)) {
-        DC_ERROR_RAISE_USER(error, "Failed to write\n", 1);
-        return;
-    }
-}
-
-int close_normal_server(int fd) {
-    if (fd) {
-        close(fd);
-    }
-    return -1;
-}
-
-static void set_signal_handling(struct dc_error * error, struct sigaction *sa)
-{
-    int result;
-
-    sigemptyset(&sa->sa_mask);
-    sa->sa_flags = 0;
-    sa->sa_handler = signal_handler;
-    result = sigaction(SIGINT, sa, NULL);
-
-    if(result == -1)
+    dc_memset(env, &client_addr, 0, sizeof(client_addr));
+    client_len = sizeof(client_addr);
+    client_fd = dc_accept(env, error, socket_fd, (struct sockaddr*) &client_addr, &client_len);
+    if(client_fd < 0)
     {
-        DC_ERROR_RAISE_USER(error, "Failed to set signal handler\n", 2);
+        dc_perror(env, "accept");
+        return;
     }
+
+    // Get connection information
+    printf("New connection from %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));    // NOLINT(concurrency-mt-unsafe)
+    int socket_error = 0;
+
+    while (socket_error == 0) {
+        if (recv(client_fd, NULL, 1, MSG_PEEK | MSG_DONTWAIT) == 0) {
+            close(client_fd);
+            return;
+        }
+        socket_error = handle_client_data(env, error, client_fd);
+        if (socket_error != 0) {
+            close(client_fd);
+        }
+    }
+    close(client_fd);
 }
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-static void signal_handler(__attribute__((unused)) int sig)
-{
-    running = 0;
+static int handle_client_data(struct dc_env *env, struct dc_error *err, int clients) {
+    DC_TRACE(env);
+
+    if (recv(clients, NULL, 1, MSG_PEEK | MSG_DONTWAIT) == 0) {
+        return -1;
+    }
+    ssize_t bytes_read;
+    char buffer[READ_BUFFER_SIZE];
+    bytes_read = dc_read(env, err, clients, buffer, (READ_BUFFER_SIZE-1));
+    buffer[bytes_read] = '\0';
+
+    if(bytes_read <= 0 && recv(clients, NULL, 1, MSG_PEEK | MSG_DONTWAIT) == 0)
+    {
+        printf("Client disconnected\n");
+        close(clients);
+        return -1;
+    }
+
+    printf("Read from client\n");
+    dc_write(env, err, STDOUT_FILENO, buffer, bytes_read);
+
+    printf("Writing to client\n");
+    uint16_t write_number = ntohs(bytes_read);
+    dc_write(env, err, clients, &write_number, sizeof(write_number));
+    return 0;
 }
-#pragma GCC diagnostic pop
