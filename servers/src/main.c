@@ -81,7 +81,7 @@ static int run_corresponding_server(struct dc_env * env, struct dc_error * error
     if (opts->run_normal_server) {
         exit_status = run_normal_server(env, error, opts);
         return exit_status;
-    } else if (opts->run_poll_server) {
+    } else if (opts->run_poll_server) { // NOLINT(llvm-else-after-return,readability-else-after-return)
         exit_status = run_poll_server(env, error, opts);
         return exit_status;
     }
@@ -111,6 +111,7 @@ static void parse_arguments(struct dc_env * env, struct dc_error * error, int ar
     }
 
     printf("Listening on ip address: %s \n", argv[1]);
+    printf("Port number: %d \n\n", opts->port_out);
     opts->ip_address = argv[1];
 
     // Check to see what server to run

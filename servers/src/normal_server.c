@@ -1,20 +1,21 @@
-#include <arpa/inet.h>
-#include <stdio.h>
 #include "server.h"
-#include <netinet/in.h>
-#include <signal.h>
-#include <dc_posix/dc_unistd.h>
-#include <string.h>
-#include <dc_util/io.h>
 #include "util.h"
+#include <arpa/inet.h>
 #include <dc_c/dc_stdio.h>
 #include <dc_c/dc_string.h>
 #include <dc_env/env.h>
 #include <dc_error/error.h>
+#include <dc_posix/dc_unistd.h>
 #include <dc_posix/sys/dc_socket.h>
+#include <dc_util/io.h>
+#include <netinet/in.h>
+#include <signal.h>
+#include <stdio.h>
+#include <string.h>
 #include <time.h>
 
 #define READ_BUFFER_SIZE 1024
+#define CONVERT_TO_MS 1000
 #define BACKLOG 5
 
 static volatile sig_atomic_t running;   // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
@@ -42,7 +43,7 @@ int run_normal_server(struct dc_env * env, struct dc_error * error, struct optio
         handle_connection(env, error, listen_fd);
 
         clock_t end = clock();
-        double time_spent = ((double)(end - beginning_connection) / CLOCKS_PER_SEC) * 1000;
+        double time_spent = ((double)(end - beginning_connection) / CLOCKS_PER_SEC) * CONVERT_TO_MS;
         write_to_file(opts, "Normal Server", "handle_connection", time_spent);
     }
 
