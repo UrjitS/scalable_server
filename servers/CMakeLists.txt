@@ -12,7 +12,8 @@ set(SANITIZE TRUE)
 set(SOURCE_DIR ${PROJECT_SOURCE_DIR}/src)
 set(INCLUDE_DIR ${PROJECT_SOURCE_DIR}/include)
 
-set(SOURCE_LIST ${SOURCE_DIR}/main.c ${SOURCE_DIR}/util.c ${SOURCE_DIR}/normal_server.c ${SOURCE_DIR}/poll_server.c)
+set(SOURCE_LIST ${SOURCE_DIR}/main.c ${SOURCE_DIR}/util.c ${SOURCE_DIR}/normal_server.c ${SOURCE_DIR}/poll_server.c
+        ${SOURCE_DIR}/select_server.c)
 set(HEADER_LIST ${INCLUDE_DIR}/util.h ${INCLUDE_DIR}/server.h)
 
 

@@ -19,7 +19,7 @@
  * @param argv Cmd line arguments.
  * @param opts Options object.
  */
-static void parse_arguments(struct dc_env * env, struct dc_error * error, int argc, char *argv[], struct options *opts);
+static int parse_arguments(struct dc_env * env, struct dc_error * error, int argc, char *argv[], struct options *opts);
 /**
  * Initializes the options object to default values.
  * @param env Environment object.
@@ -47,6 +47,7 @@ int main(int argc, char * argv[])
     struct dc_env * env;
     struct options opts;
     int exit_status = 0;
+    int return_value;
     // Set the tracer to trace through the function calls
     //tracer = dc_env_default_tracer; // Trace through function calls
     tracer = NULL; // Don't trace through function calls
@@ -59,9 +60,9 @@ int main(int argc, char * argv[])
     // Initialize options struct
     options_init(env, &opts);
     // Parse cmd line arguments
-    parse_arguments(env, err, argc, argv, &opts);
+    return_value = parse_arguments(env, err, argc, argv, &opts);
 
-    if (argc >= 1) {
+    if (!return_value) {
         run_corresponding_server(env, err, &opts);
     }
 
@@ -76,17 +77,29 @@ int main(int argc, char * argv[])
 }
 
 static int run_corresponding_server(struct dc_env * env, struct dc_error * error, struct options *opts) {
-    int exit_status;
+    int exit_status = -1;
 
-    if (opts->run_normal_server) {
-        exit_status = run_normal_server(env, error, opts);
-        return exit_status;
-    } else if (opts->run_poll_server) { // NOLINT(llvm-else-after-return,readability-else-after-return)
-        exit_status = run_poll_server(env, error, opts);
-        return exit_status;
+    switch (opts->server_to_run)
+    {
+        case ONE_TO_ONE: {
+            exit_status = run_normal_server(env, error, opts);
+            return exit_status;
+        }
+        case POLL_SERVER:
+        {
+            exit_status = run_poll_server(env, error, opts);
+            return exit_status;
+        }
+        case SELECT_SERVER:
+        {
+            exit_status = run_select_server(env, error, opts);
+            return exit_status;
+        }
+        default:{
+            DC_ERROR_RAISE_USER(error, "Invalid Specified Server Type\n", 1);
+            return exit_status;
+        }
     }
-
-    return -1;
 }
 
 static void options_init(struct dc_env * env, struct options *opts)
@@ -95,19 +108,19 @@ static void options_init(struct dc_env * env, struct options *opts)
     opts->port_out = DEFAULT_PORT;
 }
 
-static void parse_arguments(struct dc_env * env, struct dc_error * error, int argc, char *argv[], struct options *opts)
+static int parse_arguments(struct dc_env * env, struct dc_error * error, int argc, char *argv[], struct options *opts)
 {
     // Ensure ip address and run flag is given in order to run
     if (argc <= 2) {
         DC_ERROR_RAISE_USER(error, "Please give an IP Address as first argument and the run flag as the second "
-                                   "(s -> normal server, p -> poll server) [t -> truncate csv file]\n", 1);
-        return;
+                                   "(o -> one-to-one server, p -> poll server, s -> select server) [t -> truncate csv file]\n", 1);
+        return -1;
     }
 
-    // Set ip address
+    // Check ip address
     if (inet_addr(argv[1]) == ( in_addr_t)(-1)) {
         DC_ERROR_RAISE_USER(error, "Invalid IP Address", 1);
-        return;
+        return -1;
     }
 
     printf("Listening on ip address: %s \n", argv[1]);
@@ -115,10 +128,12 @@ static void parse_arguments(struct dc_env * env, struct dc_error * error, int ar
     opts->ip_address = argv[1];
 
     // Check to see what server to run
-    if (dc_strcmp(env, argv[2], "s") == 0) {
-        opts->run_normal_server = true;
+    if (dc_strcmp(env, argv[2], "o") == 0) {
+        opts->server_to_run = ONE_TO_ONE;
     } else if (dc_strcmp(env, argv[2], "p") == 0) {
-        opts->run_poll_server = true;
+        opts->server_to_run = POLL_SERVER;
+    } else if (dc_strcmp(env, argv[2], "s") == 0) {
+        opts->server_to_run = SELECT_SERVER;
     }
 
     // Optional truncate csv file
@@ -132,6 +147,8 @@ static void parse_arguments(struct dc_env * env, struct dc_error * error, int ar
     if (!opts->csv_file) {
         opts->csv_file = fopen("states.csv", "ae");
     }
+
+    return 0;
 }
 
 static void close_server(struct dc_error * error) {

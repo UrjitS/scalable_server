@@ -5,6 +5,11 @@
 #include <stdbool.h>
 #include <bits/types/FILE.h>
 
+enum server_types {
+    ONE_TO_ONE,
+    POLL_SERVER,
+    SELECT_SERVER
+};
 
 struct options
 {
@@ -17,13 +22,9 @@ struct options
      */
     FILE * csv_file;
     /**
-     * If to run the normal server
+     * Type of server to run
      */
-    bool run_normal_server;
-    /**
-     * If to run the poll server
-     */
-    bool run_poll_server;
+    enum server_types server_to_run;
     /**
      * Port to run on
      */
