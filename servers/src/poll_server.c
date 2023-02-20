@@ -1,39 +1,47 @@
-#include "server.h"
-#include "util.h"
-#include <arpa/inet.h>
 #include <dc_c/dc_stdio.h>
 #include <dc_c/dc_stdlib.h>
 #include <dc_c/dc_string.h>
-#include <dc_env/env.h>
-#include <dc_error/error.h>
 #include <dc_posix/arpa/dc_inet.h>
+#include <dc_posix/dc_dlfcn.h>
 #include <dc_posix/dc_poll.h>
-#include <dc_posix/dc_unistd.h>
 #include <dc_posix/dc_semaphore.h>
 #include <dc_posix/dc_signal.h>
 #include <dc_posix/dc_string.h>
+#include <dc_posix/dc_unistd.h>
+#include <dc_posix/sys/dc_select.h>
 #include <dc_posix/sys/dc_socket.h>
 #include <dc_posix/sys/dc_wait.h>
-#include <dc_util/io.h>
 #include <dc_util/networking.h>
 #include <dc_util/system.h>
+#include <dlfcn.h>
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <signal.h>
-#include <stdio.h>
-#include <string.h>
-#include <time.h>
 #include <sys/poll.h>
-#include <sys/semaphore.h>
-
-#define VERBOSE_SERVER false
-#define VERBOSE_HANDLER false
-#define DEBUG_SERVER false
-#define DEBUG_HANDLER false
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <dc_util/io.h>
+#include "server.h"
 
 typedef ssize_t (*read_message_func)(const struct dc_env *env, struct dc_error *err, uint8_t **raw_data, int client_socket);
 typedef size_t (*process_message_func)(const struct dc_env *env, struct dc_error *err, const uint8_t *raw_data, uint8_t **processed_data, ssize_t count);
 typedef void (*send_message_func)(const struct dc_env *env, struct dc_error *err, uint8_t *buffer, size_t count, int client_socket, bool *closed);
+
+static const int BLOCK_SIZE = 1024 * 4;
+
+struct settings
+{
+    char *library_path;
+    char *interface; // ifconfig
+    char *address; // ip address
+    uint16_t port; // port
+    uint16_t backlog; // number of backlog for listen
+    uint8_t jobs; // jobs to create
+    bool verbose_server;
+    bool verbose_handler;
+    bool debug_server;
+    bool debug_handler;
+};
 
 struct server_info
 {
@@ -47,12 +55,20 @@ struct server_info
     struct pollfd *poll_fds;
 };
 
+struct message_handler
+{
+    read_message_func reader;
+    process_message_func processor;
+    send_message_func sender;
+};
+
 struct worker_info
 {
     sem_t *select_sem;
     sem_t *domain_sem;
     int domain_socket;
     int pipe_fd;
+    struct message_handler message_handler;
 };
 
 struct revive_message
@@ -61,32 +77,51 @@ struct revive_message
     bool closed;
 };
 
-static void sigint_handler(int signal);
-static bool create_workers(struct dc_env *env, struct dc_error *err, const uint8_t *jobs, pid_t *workers, sem_t *select_sem, sem_t *domain_sem, const int domain_sockets[2], const int pipe_fds[2]);
-static void initialize_server(const struct dc_env *env, struct dc_error *err, struct server_info *server, const uint8_t *jobs, sem_t *domain_sem, int domain_socket, int pipe_fd, pid_t *workers, struct options *opts);
+
+static void setup_default_settings(const struct dc_env *env, struct dc_error *err, struct settings *default_settings, struct options *opts);
+static void copy_settings(const struct dc_env *env, struct dc_error *err, struct settings *settings, const struct settings *default_settings);
+static void destroy_settings(const struct dc_env *env, struct settings *settings);
+static void parse_args(const struct dc_env *env, struct settings *settings);
+static void sigint_handler(__attribute__((unused)) int signal);
+static void setup_message_handler(struct message_handler *message_handler);
+static bool create_workers(struct dc_env *env, struct dc_error *err, const struct settings *settings, pid_t *workers, sem_t *select_sem, sem_t *domain_sem, const int domain_sockets[2], const int pipe_fds[2]);
+static void initialize_server(const struct dc_env *env, struct dc_error *err, struct server_info *server,  const struct settings *settings, sem_t *domain_sem, int domain_socket, int pipe_fd, pid_t *workers);
 static void destroy_server(const struct dc_env *env, struct dc_error *err, struct server_info *server);
-static void run_server(const struct dc_env *env, struct dc_error *err, struct options *opts, struct server_info *server);
-static void server_loop(const struct dc_env *env, struct dc_error *err, struct options *opts, struct server_info *server);
-static bool handle_change(const struct dc_env *env, struct dc_error *err, struct options *opts, struct server_info *server, struct pollfd *poll_fd);
-static void accept_connection(const struct dc_env *env, struct dc_error *err, struct server_info *server);
-static void write_socket_to_domain_socket(const struct dc_env *env, struct dc_error *err, const struct server_info *server, int client_socket);
-static void revive_socket(const struct dc_env *env, struct dc_error *err, const struct server_info *server, struct revive_message *message);
-static void close_connection(const struct dc_env *env, struct dc_error *err, struct server_info *server, int client_socket);
+static void run_server(const struct dc_env *env, struct dc_error *err, struct server_info *server, const struct settings *settings);
+static void server_loop(const struct dc_env *env, struct dc_error *err, const struct settings *settings, struct server_info *server);
+static bool handle_change(const struct dc_env *env, struct dc_error *err, const struct settings *settings, struct server_info *server, struct pollfd *poll_fd);
+static void accept_connection(const struct dc_env *env, struct dc_error *err, const struct settings *settings, struct server_info *server);
+static void write_socket_to_domain_socket(const struct dc_env *env, struct dc_error *err, const struct settings *settings, const struct server_info *server, int client_socket);
+static void revive_socket(const struct dc_env *env, struct dc_error *err, const struct settings *settings, const struct server_info *server, struct revive_message *message);
+static void close_connection(const struct dc_env *env, struct dc_error *err, const struct settings *settings, struct server_info *server, int client_socket);
 static void wait_for_workers(const struct dc_env *env, struct dc_error *err, struct server_info *server);
-static void worker_process(struct dc_env *env, struct dc_error *err, struct worker_info *worker);
-static int handle_client_data(struct dc_env *env, struct dc_error *err, int clients);
+static void worker_process(struct dc_env *env, struct dc_error *err, struct worker_info *worker, const struct settings *settings);
 static bool extract_message_parameters(const struct dc_env *env, struct dc_error *err, struct worker_info *worker, int *client_socket, int *value);
-static void process_message(const struct dc_env *env, struct dc_error *err, struct worker_info *worker);
+static void process_message(const struct dc_env *env, struct dc_error *err, struct worker_info *worker, const struct settings *settings);
 static void send_revive(const struct dc_env *env, struct dc_error *err, struct worker_info *worker, int client_socket, int fd, bool closed);
 static void print_fd(const struct dc_env *env, const char *message, int fd, bool display);
 static void print_socket(const struct dc_env *env, struct dc_error *err, const char *message, int socket, bool display);
+ssize_t read_message_handler(const struct dc_env *env, struct dc_error *err, uint8_t **raw_data, int client_socket);
+size_t process_message_handler(const struct dc_env *env, struct dc_error *err, const uint8_t *raw_data, uint8_t **processed_data, ssize_t count);
+void send_message_handler(const struct dc_env *env, struct dc_error *err, uint8_t *buffer, size_t count, int client_socket, bool *closed);
+
 
 static const int DEFAULT_N_PROCESSES = 2;
-static volatile sig_atomic_t running;   // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
+static const int DEFAULT_BACKLOG = SOMAXCONN;
+static volatile sig_atomic_t done = 0;     // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 int run_poll_server(struct dc_env * env, struct dc_error * error, struct options *opts) {
     DC_TRACE(env);
-    printf("Poll process pool server on %s\n", opts->ip_address);
+
+    struct settings *default_settings;
+    struct settings settings;
+
+    default_settings = dc_malloc(env, error, sizeof(*default_settings));
+    setup_default_settings(env, error, default_settings, opts);
+    dc_memset(env, &settings, 0, sizeof(settings));
+    copy_settings(env, error, &settings, default_settings);
+    parse_args(env, &settings);
+
 
     sem_t *select_sem;
     sem_t *domain_sem;
@@ -97,19 +132,26 @@ int run_poll_server(struct dc_env * env, struct dc_error * error, struct options
     pid_t pid;
     char domain_sem_name[100];  // NOLINT(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
     char select_sem_name[100];  // NOLINT(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
-    uint8_t jobs = dc_get_number_of_processors(env, error, DEFAULT_N_PROCESSES);
+
+    if(settings.debug_server)
+    {
+        dc_env_set_tracer(env, dc_env_default_tracer);
+    }
+
+    destroy_settings(env, default_settings);
+    dc_free(env, default_settings);
 
     socketpair(AF_UNIX, SOCK_DGRAM, 0, domain_sockets);
     dc_pipe(env, error, pipe_fds);
-    printf("Starting server (%d)\n", getpid());
+    printf("Starting server (%d) on %s:%d\n", getpid(), settings.address, settings.port);
     workers = NULL;
     pid = getpid();
     sprintf(domain_sem_name, "/sem-%d-domain", pid);    // NOLINT(cert-err33-c)
     sprintf(select_sem_name, "/sem-%d-select", pid);    // NOLINT(cert-err33-c)
     select_sem = sem_open(select_sem_name, O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH, 1);
     domain_sem = sem_open(domain_sem_name, O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH, 1);
-    workers = (pid_t *)dc_malloc(env, error, jobs * sizeof(pid_t));
-    is_server = create_workers(env, error, &jobs, workers, select_sem, domain_sem, domain_sockets, pipe_fds);
+    workers = (pid_t *)dc_malloc(env, error, settings.jobs * sizeof(pid_t));
+    is_server = create_workers(env, error, &settings, workers, select_sem, domain_sem, domain_sockets, pipe_fds);
 
     if(is_server)
     {
@@ -123,41 +165,111 @@ int run_poll_server(struct dc_env * env, struct dc_error * error, struct options
         dc_close(env, error, domain_sockets[0]);
         dc_close(env, error, pipe_fds[1]);
         dc_memset(env, &server, 0, sizeof(server));
-        initialize_server(env, error, &server, &jobs, domain_sem, domain_sockets[1], pipe_fds[0], workers, opts);
-        run_server(env, error, opts, &server);
+        initialize_server(env, error, &server, &settings, domain_sem, domain_sockets[1], pipe_fds[0], workers);
+        run_server(env, error, &server, &settings);
         destroy_server(env, error, &server);
-
-        sem_close(domain_sem);
-        sem_close(select_sem);
-
-        if(is_server)
-        {
-            sem_unlink(domain_sem_name);
-            sem_unlink(select_sem_name);
-        }
     }
 
+    sem_close(domain_sem);
+    sem_close(select_sem);
+
+    if(is_server)
+    {
+        sem_unlink(domain_sem_name);
+        sem_unlink(select_sem_name);
+    }
+
+
+    destroy_settings(env, &settings);
     printf("Exiting %d\n", getpid());
     free(env);
     dc_error_reset(error);
     free(error);
-    return 0;
+
+    return EXIT_SUCCESS;
 }
 
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-static void sigint_handler(int signal)
+static void setup_default_settings(const struct dc_env *env, struct dc_error *err, struct settings *default_settings, struct options *opts)
 {
-    running = 0;
+    DC_TRACE(env);
+    default_settings->library_path     = NULL;
+    default_settings->interface        = dc_get_default_interface(env, err, AF_INET);
+    default_settings->address          = dc_get_ip_addresses_by_interface(env, err, default_settings->interface, AF_INET);
+    default_settings->port             = opts->port_out;
+    default_settings->backlog          = DEFAULT_BACKLOG;
+    default_settings->jobs             = dc_get_number_of_processors(env, err, DEFAULT_N_PROCESSES);
+    default_settings->verbose_server   = false;
+    default_settings->verbose_handler  = false;
+    default_settings->debug_server     = false;
+    default_settings->debug_handler    = false;
 }
-#pragma GCC diagnostic pop
+
+static void copy_settings(const struct dc_env *env, struct dc_error *err, struct settings *settings, const struct settings *default_settings)
+{
+    DC_TRACE(env);
+    settings->interface        = dc_strdup(env, err, default_settings->interface);
+    settings->address          = dc_strdup(env, err, default_settings->address);
+    settings->port             = default_settings->port;
+    settings->backlog          = default_settings->backlog;
+    settings->jobs             = default_settings->jobs;
+    settings->verbose_server   = default_settings->verbose_server;
+    settings->verbose_handler  = default_settings->verbose_handler;
+    settings->debug_server     = default_settings->debug_server;
+    settings->debug_handler    = default_settings->debug_handler;
+}
 
 
-static bool create_workers(struct dc_env *env, struct dc_error *err, const uint8_t *jobs, pid_t *workers, sem_t *select_sem, sem_t *domain_sem, const int domain_sockets[2], const int pipe_fds[2])
+static void destroy_settings(const struct dc_env *env, struct settings *settings)
 {
     DC_TRACE(env);
 
-    for(int i = 0; i < *jobs; i++)
+    if(settings->library_path)
+    {
+        dc_free(env, settings->library_path);
+    }
+
+    if(settings->interface)
+    {
+        dc_free(env, settings->interface);
+    }
+
+    if(settings->address)
+    {
+        dc_free(env, settings->address);
+    }
+}
+
+static void parse_args(const struct dc_env *env, struct settings *settings)
+{
+
+    DC_TRACE(env);
+
+    settings->verbose_server = true;
+    settings->verbose_handler = true;
+
+}
+
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+static void sigint_handler(__attribute__((unused)) int signal)
+{
+    done = true;
+}
+#pragma GCC diagnostic pop
+
+static void setup_message_handler(struct message_handler *message_handler)
+{
+    message_handler->reader = read_message_handler;
+    message_handler->processor = process_message_handler;
+    message_handler->sender = send_message_handler;
+}
+
+static bool create_workers(struct dc_env *env, struct dc_error *err, const struct settings *settings, pid_t *workers, sem_t *select_sem, sem_t *domain_sem, const int domain_sockets[2], const int pipe_fds[2])
+{
+    DC_TRACE(env);
+
+    for(int i = 0; i < settings->jobs; i++)
     {
         pid_t pid;
 
@@ -167,6 +279,7 @@ static bool create_workers(struct dc_env *env, struct dc_error *err, const uint8
         {
             struct sigaction act;
             struct worker_info worker;
+            void *library;
 
             act.sa_handler = sigint_handler;
             dc_sigemptyset(env, err, &act.sa_mask);
@@ -175,14 +288,19 @@ static bool create_workers(struct dc_env *env, struct dc_error *err, const uint8
             dc_free(env, workers);
             dc_close(env, err, domain_sockets[1]);
             dc_close(env, err, pipe_fds[0]);
+            library = dc_dlopen(env, err, settings->library_path, RTLD_LAZY);
 
             if(dc_error_has_no_error(err))
             {
+                dc_memset(env, &worker.message_handler, 0, sizeof(worker.message_handler));
+                setup_message_handler(&worker.message_handler);
+
                 worker.select_sem = select_sem;
                 worker.domain_sem = domain_sem;
                 worker.domain_socket = domain_sockets[0];
                 worker.pipe_fd = pipe_fds[1];
-                worker_process(env, err, &worker);
+                worker_process(env, err, &worker, settings);
+                dc_dlclose(env, err, library);
             }
 
             return false;
@@ -194,7 +312,7 @@ static bool create_workers(struct dc_env *env, struct dc_error *err, const uint8
     return true;
 }
 
-static void initialize_server(const struct dc_env *env, struct dc_error *err, struct server_info *server, const uint8_t *jobs, sem_t *domain_sem, int domain_socket, int pipe_fd, pid_t *workers, struct options *opts)
+static void initialize_server(const struct dc_env *env, struct dc_error *err, struct server_info *server,  const struct settings *settings, sem_t *domain_sem, int domain_socket, int pipe_fd, pid_t *workers)
 {
     static int optval = 1;
     struct sockaddr_in server_address;
@@ -203,16 +321,16 @@ static void initialize_server(const struct dc_env *env, struct dc_error *err, st
     server->domain_sem = domain_sem;
     server->domain_socket = domain_socket;
     server->pipe_fd = pipe_fd;
-    server->num_workers = *jobs;
+    server->num_workers = settings->jobs;
     server->workers = workers;
     server->listening_socket = socket(AF_INET, SOCK_STREAM, 0);
     dc_memset(env, &server_address, 0, sizeof(server_address));
     server_address.sin_family = AF_INET;
-    server_address.sin_addr.s_addr = dc_inet_addr(env, err, opts->ip_address);
-    server_address.sin_port = dc_htons(env, opts->port_out);
+    server_address.sin_addr.s_addr = dc_inet_addr(env, err, settings->address);
+    server_address.sin_port = dc_htons(env, settings->port);
     dc_setsockopt(env, err, server->listening_socket, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval));
     dc_bind(env, err, server->listening_socket, (struct sockaddr *)&server_address, sizeof(server_address));
-    dc_listen(env, err, server->listening_socket, BACKLOG);
+    dc_listen(env, err, server->listening_socket, settings->backlog);
     server->poll_fds = (struct pollfd *)dc_malloc(env, err, sizeof(struct pollfd) * 2);
     server->poll_fds[0].fd = server->listening_socket;
     server->poll_fds[0].events = POLLIN;
@@ -237,10 +355,10 @@ static void destroy_server(const struct dc_env *env, struct dc_error *err, struc
     dc_close(env, err, server->pipe_fd);
 }
 
-static void run_server(const struct dc_env *env, struct dc_error *err, struct options *opts, struct server_info *server)
+static void run_server(const struct dc_env *env, struct dc_error *err, struct server_info *server, const struct settings *settings)
 {
     DC_TRACE(env);
-    server_loop(env, err, opts, server);
+    server_loop(env, err, settings, server);
 
     /*
     for(int i = 0; i < server->num_workers; i++)
@@ -252,12 +370,11 @@ static void run_server(const struct dc_env *env, struct dc_error *err, struct op
     wait_for_workers(env, err, server);
 }
 
-static void server_loop(const struct dc_env *env, struct dc_error *err, struct options *opts, struct server_info *server)
+static void server_loop(const struct dc_env *env, struct dc_error *err, const struct settings *settings, struct server_info *server)
 {
     DC_TRACE(env);
 
-    running = 1;
-    while(running)
+    while(!done)
     {
         int poll_result;
 
@@ -283,18 +400,18 @@ static void server_loop(const struct dc_env *env, struct dc_error *err, struct o
 
             if(poll_fd->revents != 0)
             {
-                handle_change(env, err, opts, server, poll_fd);
+                handle_change(env, err, settings, server, poll_fd);
             }
         }
 
         if(dc_error_has_error(err))
         {
-            running = false;
+            done = true;
         }
     }
 }
 
-static bool handle_change(const struct dc_env *env, struct dc_error *err, struct options *opts, struct server_info *server, struct pollfd *poll_fd)
+static bool handle_change(const struct dc_env *env, struct dc_error *err, const struct settings *settings, struct server_info *server, struct pollfd *poll_fd)
 {
     int fd;
     short revents;
@@ -316,13 +433,13 @@ static bool handle_change(const struct dc_env *env, struct dc_error *err, struct
     {
         if(fd == server->listening_socket)
         {
-            accept_connection(env, err, server);
+            accept_connection(env, err, settings, server);
         }
         else if(fd == server->pipe_fd)
         {
             struct revive_message message;
 
-            revive_socket(env, err, server, &message);
+            revive_socket(env, err, settings, server, &message);
 
             if(message.closed)
             {
@@ -332,19 +449,19 @@ static bool handle_change(const struct dc_env *env, struct dc_error *err, struct
         else
         {
             poll_fd->events = 0;
-            write_socket_to_domain_socket(env, err, server, fd);
+            write_socket_to_domain_socket(env, err, settings, server, fd);
         }
     }
 
     if(close_fd > -1)
     {
-        close_connection(env, err, server, close_fd);
+        close_connection(env, err, settings, server, close_fd);
     }
 
     return close_fd != -1;
 }
 
-static void accept_connection(const struct dc_env *env, struct dc_error *err, struct server_info *server)
+static void accept_connection(const struct dc_env *env, struct dc_error *err, const struct settings *settings, struct server_info *server)
 {
     struct sockaddr_in client_address;
     socklen_t client_address_len;
@@ -358,9 +475,10 @@ static void accept_connection(const struct dc_env *env, struct dc_error *err, st
     server->poll_fds[server->num_fds].events = POLLIN | POLLHUP;
     server->poll_fds[server->num_fds].revents = 0;
     server->num_fds++;
-    print_socket(env, err, "Accepted connection from", client_socket, VERBOSE_SERVER);
+    print_socket(env, err, "Accepted connection from", client_socket, settings->verbose_server);
 }
-static void write_socket_to_domain_socket(const struct dc_env *env, struct dc_error *err, const struct server_info *server, int client_socket)
+
+static void write_socket_to_domain_socket(const struct dc_env *env, struct dc_error *err, const struct settings *settings, const struct server_info *server, int client_socket)
 {
     struct msghdr msg;
     struct iovec iov;
@@ -385,7 +503,7 @@ static void write_socket_to_domain_socket(const struct dc_env *env, struct dc_er
         cmsg->cmsg_type = SCM_RIGHTS;
         cmsg->cmsg_len = CMSG_LEN(sizeof(int));
         *((int *) CMSG_DATA(cmsg)) = client_socket;
-        print_fd(env, "Sending to client", client_socket, VERBOSE_SERVER);
+        print_fd(env, "Sending to client", client_socket, settings->verbose_server);
 
         // Send the client listening_socket descriptor to the domain listening_socket
         dc_sendmsg(env, err, server->domain_socket, &msg, 0);
@@ -398,17 +516,18 @@ static void write_socket_to_domain_socket(const struct dc_env *env, struct dc_er
         DC_ERROR_RAISE_SYSTEM(err, error_message, errno);
     }
 }
-static void revive_socket(const struct dc_env *env, struct dc_error *err, const struct server_info *server, struct revive_message *message)
+
+static void revive_socket(const struct dc_env *env, struct dc_error *err, const struct settings *settings, const struct server_info *server, struct revive_message *message)
 {
     DC_TRACE(env);
 
     dc_sem_wait(env, err, server->domain_sem);
     dc_read(env, err, server->pipe_fd, message, sizeof(*message));
+    dc_sem_post(env, err, server->domain_sem);
 
     if(dc_error_has_no_error(err))
     {
-        print_fd(env, "Reviving listening_socket", message->fd, VERBOSE_SERVER);
-        dc_sem_post(env, err, server->domain_sem);
+        print_fd(env, "Reviving listening_socket", message->fd, settings->verbose_server);
 
         for(int i = 2; i < server->num_fds; i++)
         {
@@ -423,10 +542,11 @@ static void revive_socket(const struct dc_env *env, struct dc_error *err, const 
         }
     }
 }
-static void close_connection(const struct dc_env *env, struct dc_error *err, struct server_info *server, int client_socket)
+
+static void close_connection(const struct dc_env *env, struct dc_error *err, const struct settings *settings, struct server_info *server, int client_socket)
 {
     DC_TRACE(env);
-    print_fd(env, "Closing", client_socket, VERBOSE_SERVER);
+    print_fd(env, "Closing", client_socket, settings->verbose_server);
     dc_close(env, err, client_socket);
 
     for(int i = 0; i < server->num_fds; i++)
@@ -454,6 +574,7 @@ static void close_connection(const struct dc_env *env, struct dc_error *err, str
         server->poll_fds = (struct pollfd *)realloc(server->poll_fds, server->num_fds * sizeof(struct pollfd));
     }
 }
+
 static void wait_for_workers(const struct dc_env *env, struct dc_error *err, struct server_info *server)
 {
     DC_TRACE(env);
@@ -477,13 +598,13 @@ static void wait_for_workers(const struct dc_env *env, struct dc_error *err, str
     dc_close(env, err, server->listening_socket);
 }
 
-static void worker_process(struct dc_env *env, struct dc_error *err, struct worker_info *worker)
+static void worker_process(struct dc_env *env, struct dc_error *err, struct worker_info *worker, const struct settings *settings)
 {
     pid_t pid;
 
     DC_TRACE(env);
 
-    if(DEBUG_HANDLER)
+    if(settings->debug_handler)
     {
         dc_env_set_tracer(env, dc_env_default_tracer);
     }
@@ -495,9 +616,9 @@ static void worker_process(struct dc_env *env, struct dc_error *err, struct work
     pid = dc_getpid(env);
     printf("Started worker (%d)\n", pid);
 
-    while(running)
+    while(!done)
     {
-        process_message(env, err, worker);
+        process_message(env, err, worker, settings);
 
         if(dc_error_has_error(err))
         {
@@ -510,34 +631,205 @@ static void worker_process(struct dc_env *env, struct dc_error *err, struct work
     dc_close(env, err, worker->pipe_fd);
 }
 
-static int handle_client_data(struct dc_env *env, struct dc_error *err, int clients) {
+static bool extract_message_parameters(const struct dc_env *env, struct dc_error *err, struct worker_info *worker, int *client_socket, int *value)
+{
+    struct msghdr msg;
+    char buf[CMSG_SPACE(sizeof(int) * 2)];
+    struct iovec io;
+    struct cmsghdr *cmsg;
+    fd_set read_fds;
+    int result;
+    bool got_message;
+
     DC_TRACE(env);
+    dc_memset(env, &msg, 0, sizeof(msg));
+    dc_memset(env, &io, 0, sizeof(io));
+    dc_memset(env, buf, '\0', sizeof(buf));
+    io.iov_base = value;
+    io.iov_len = sizeof(*value);
 
-    if (recv(clients, NULL, 1, MSG_PEEK | MSG_DONTWAIT) == 0) {
-        return -1;
-    }
-    ssize_t bytes_read;
-    char buffer[READ_BUFFER_SIZE];
-    bytes_read = dc_read(env, err, clients, buffer, (READ_BUFFER_SIZE-1));
-    buffer[bytes_read] = '\0';
+    msg.msg_iov = &io;
+    msg.msg_iovlen = 1;
+    msg.msg_control = buf;
+    msg.msg_controllen = sizeof(buf);
 
-    if(bytes_read <= 0 && recv(clients, NULL, 1, MSG_PEEK | MSG_DONTWAIT) == 0)
+    FD_ZERO(&read_fds);
+    FD_SET(worker->domain_socket, &read_fds);
+
+    dc_sem_wait(env, err, worker->select_sem);
+
+    if(done)
     {
-        printf("Client disconnected\n");
-        close(clients);
-        return -1;
+        got_message = false;
+    }
+    else
+    {
+        result = dc_select(env, err, worker->domain_socket + 1, &read_fds, NULL, NULL, NULL);
+
+        if(result > 0)
+        {
+            dc_recvmsg(env, err, worker->domain_socket, &msg, 0);
+            got_message = true;
+        }
+        else
+        {
+            got_message = false;
+        }
+
+        dc_sem_post(env, err, worker->select_sem);
+
+        if(got_message)
+        {
+            cmsg = CMSG_FIRSTHDR(&msg);
+            (*client_socket) = *((int *) CMSG_DATA(cmsg));
+        }
     }
 
-    printf("Read from client\n");
-    dc_write(env, err, STDOUT_FILENO, buffer, bytes_read);
-
-    printf("Writing to client\n");
-    uint16_t write_number = ntohs(bytes_read);
-    dc_write(env, err, clients, &write_number, sizeof(write_number));
-    return 0;
+    return got_message;
 }
 
-static void process_message(const struct dc_env *env, struct dc_error *err, struct worker_info *worker)
+static void process_message(const struct dc_env *env, struct dc_error *err, struct worker_info *worker, const struct settings *settings)
 {
+    int client_socket;
+    int fd;
+    bool got_message;
 
+    client_socket = -1;
+    got_message = extract_message_parameters(env, err, worker, &client_socket, &fd);
+
+    if(got_message && dc_error_has_no_error(err))
+    {
+        uint8_t *raw_data;
+        ssize_t raw_data_length;
+        bool closed;
+
+        print_fd(env, "Started working on", fd, settings->verbose_handler);
+        raw_data = NULL;
+        raw_data_length =  worker->message_handler.reader(env, err, &raw_data, client_socket);
+        closed = true; // set it to true so if the client forgets to set it the connection is closed which is probably bad for some things - making it noticed, also if there is an issue reading/writing probably should close.
+
+        if(dc_error_has_no_error(err))
+        {
+            if(raw_data_length == 0)
+            {
+                closed = true;
+            }
+            else
+            {
+                uint8_t *processed_data;
+                size_t processed_data_length;
+
+                processed_data = NULL;
+                processed_data_length = worker->message_handler.processor(env, err, raw_data, &processed_data, raw_data_length);
+
+                if(dc_error_has_no_error(err))
+                {
+                    worker->message_handler.sender(env, err, processed_data, processed_data_length, client_socket, &closed);
+                }
+
+                if(processed_data)
+                {
+                    dc_free(env, processed_data);
+                }
+            }
+        }
+
+        if(raw_data)
+        {
+            dc_free(env, raw_data);
+        }
+
+        print_fd(env, "Done working on", fd, settings->verbose_handler);
+        send_revive(env, err, worker, client_socket, fd, closed);
+    }
+}
+
+static void send_revive(const struct dc_env *env, struct dc_error *err, struct worker_info *worker, int client_socket, int fd, bool closed)
+{
+    struct revive_message message;
+
+    DC_TRACE(env);
+    dc_memset(env, &message, 0, sizeof(message));
+    message.fd = fd;
+    message.closed = closed;
+    dc_sem_wait(env, err, worker->domain_sem);
+    dc_write(env, err, worker->pipe_fd, &message, sizeof(message));
+    dc_sem_post(env, err, worker->domain_sem);
+    dc_close(env, err, client_socket);
+}
+
+static void print_fd(const struct dc_env *env, const char *message, int fd, bool display)
+{
+    DC_TRACE(env);
+
+    if(display)
+    {
+        printf("(pid=%d) %s with FD %d\n", getpid(), message, fd);
+    }
+}
+
+static void print_socket(const struct dc_env *env, struct dc_error *err, const char *message, int socket, bool display)
+{
+    DC_TRACE(env);
+
+    if(display)
+    {
+        struct sockaddr_in peer_address;
+        socklen_t peer_address_len;
+        uint16_t port;
+        char *printable_address;
+
+        peer_address_len = sizeof(peer_address);
+        dc_getpeername(env, err, socket, (struct sockaddr *)&peer_address, &peer_address_len);
+
+        printable_address = dc_inet_ntoa(env, peer_address.sin_addr);
+        port = dc_ntohs(env, peer_address.sin_port);
+        printf("(pid=%d) %s: %s:%d - %d\n", getpid(), message, printable_address, port, socket);
+    }
+}
+
+ssize_t read_message_handler(const struct dc_env *env, struct dc_error *err, uint8_t **raw_data, int client_socket)
+{
+    ssize_t bytes_read;
+    size_t buffer_len;
+    uint8_t *buffer;
+
+    DC_TRACE(env);
+    buffer_len = BLOCK_SIZE * sizeof(*buffer);
+    buffer = dc_malloc(env, err, buffer_len);
+    bytes_read = dc_read(env, err, client_socket, buffer, buffer_len);
+
+    if(dc_error_has_no_error(err))
+    {
+        *raw_data = dc_malloc(env, err, bytes_read);
+        dc_memcpy(env, *raw_data, buffer, bytes_read);
+    }
+    else
+    {
+        *raw_data = NULL;
+    }
+
+    dc_free(env, buffer);
+
+    return bytes_read;
+}
+
+size_t process_message_handler(const struct dc_env *env, struct dc_error *err, const uint8_t *raw_data, uint8_t **processed_data, ssize_t count)
+{
+    size_t processed_length;
+
+    DC_TRACE(env);
+
+    processed_length = count * sizeof(**processed_data);
+    *processed_data = dc_malloc(env, err, processed_length);
+    dc_memcpy(env, *processed_data, raw_data, processed_length);
+
+    return processed_length;
+}
+
+void send_message_handler(const struct dc_env *env, struct dc_error *err, uint8_t *buffer, size_t count, int client_socket, bool *closed)
+{
+    DC_TRACE(env);
+    dc_write_fully(env, err, client_socket, buffer, count);
+    *closed = false;
 }
