@@ -99,7 +99,7 @@ void handle_connection(struct dc_env *env, struct dc_error *error, int socket_fd
     socklen_t client_len;
     int client_fd;
 
-    printf("Setup server and awaiting connection\n");
+    printf("Setup 1-1 Server and awaiting connection\n");
 
     // Accept connection
     dc_memset(env, &client_addr, 0, sizeof(client_addr));

@@ -3,7 +3,7 @@
 
 #include <netinet/in.h>
 #include <stdbool.h>
-#include <bits/types/FILE.h>
+#include <stdio.h>
 
 enum server_types {
     ONE_TO_ONE,
@@ -29,6 +29,7 @@ struct options
      * Port to run on
      */
     in_port_t port_out;
+    clock_t time;
 };
 
 void write_to_file(struct options *opts, const char * server_name, const char * function_name, double time_taken);
