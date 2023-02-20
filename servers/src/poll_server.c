@@ -110,13 +110,10 @@ int run_poll_server(struct dc_env * env, struct dc_error * error, struct options
     DC_TRACE(env);
 
     struct settings *default_settings;
-    struct settings settings;
 
     default_settings = dc_malloc(env, error, sizeof(*default_settings));
     setup_default_settings(env, error, default_settings, opts);
-    dc_memset(env, &settings, 0, sizeof(settings));
-    copy_settings(env, error, &settings, default_settings);
-    parse_args(env, &settings);
+    parse_args(env, default_settings);
 
 
     sem_t *select_sem;
@@ -129,25 +126,25 @@ int run_poll_server(struct dc_env * env, struct dc_error * error, struct options
     char domain_sem_name[100];  // NOLINT(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
     char select_sem_name[100];  // NOLINT(cppcoreguidelines-avoid-magic-numbers,readability-magic-numbers)
 
-    if(settings.debug_server)
+    if(default_settings->debug_server)
     {
         dc_env_set_tracer(env, dc_env_default_tracer);
     }
 
-    destroy_settings(env, default_settings);
-    dc_free(env, default_settings);
+//    destroy_settings(env, default_settings);
+//    dc_free(env, default_settings);
 
     socketpair(AF_UNIX, SOCK_DGRAM, 0, domain_sockets);
     dc_pipe(env, error, pipe_fds);
-    printf("Starting server (%d) on %s:%d\n", getpid(), settings.address, settings.port);
+    printf("Starting server (%d) on %s:%d\n", getpid(), default_settings->address, default_settings->port);
     workers = NULL;
     pid = getpid();
     sprintf(domain_sem_name, "/sem-%d-domain", pid);    // NOLINT(cert-err33-c)
     sprintf(select_sem_name, "/sem-%d-select", pid);    // NOLINT(cert-err33-c)
     select_sem = sem_open(select_sem_name, O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH, 1);
     domain_sem = sem_open(domain_sem_name, O_CREAT, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH, 1);
-    workers = (pid_t *)dc_malloc(env, error, settings.jobs * sizeof(pid_t));
-    is_server = create_workers(env, error, &settings, workers, select_sem, domain_sem, domain_sockets, pipe_fds);
+    workers = (pid_t *)dc_malloc(env, error, default_settings->jobs * sizeof(pid_t));
+    is_server = create_workers(env, error, default_settings, workers, select_sem, domain_sem, domain_sockets, pipe_fds);
 
     if(is_server)
     {
@@ -161,8 +158,8 @@ int run_poll_server(struct dc_env * env, struct dc_error * error, struct options
         dc_close(env, error, domain_sockets[0]);
         dc_close(env, error, pipe_fds[1]);
         dc_memset(env, &server, 0, sizeof(server));
-        initialize_server(env, error, &server, &settings, domain_sem, domain_sockets[1], pipe_fds[0], workers);
-        run_server(env, error, &server, &settings, opts);
+        initialize_server(env, error, &server, default_settings, domain_sem, domain_sockets[1], pipe_fds[0], workers);
+        run_server(env, error, &server, default_settings, opts);
         destroy_server(env, error, &server);
     }
 
@@ -176,12 +173,12 @@ int run_poll_server(struct dc_env * env, struct dc_error * error, struct options
     }
 
 
-    destroy_settings(env, &settings);
+    destroy_settings(env, default_settings);
     printf("Exiting %d\n", getpid());
     free(env);
     dc_error_reset(error);
     free(error);
-
+    free(default_settings);
     return EXIT_SUCCESS;
 }
 
@@ -346,13 +343,6 @@ static void run_server(const struct dc_env *env, struct dc_error *err, struct se
 {
     DC_TRACE(env);
     server_loop(env, err, settings, server, opts);
-
-    /*
-    for(int i = 0; i < server->num_workers; i++)
-    {
-        kill(server->workers[i], SIGINT);
-    }
-    */
 
     wait_for_workers(env, err, server);
 }
