@@ -95,6 +95,11 @@ static int run_corresponding_server(struct dc_env * env, struct dc_error * error
             exit_status = run_select_server(env, error, opts);
             return exit_status;
         }
+        case THREAD_POLL_SERVER:
+        {
+            exit_status = run_thread_poll_server(env, error, opts);
+            return exit_status;
+        }
         default:{
             DC_ERROR_RAISE_USER(error, "Invalid Specified Server Type\n", 1);
             return exit_status;
@@ -134,6 +139,8 @@ static int parse_arguments(struct dc_env * env, struct dc_error * error, int arg
         opts->server_to_run = POLL_SERVER;
     } else if (dc_strcmp(env, argv[2], "s") == 0) {
         opts->server_to_run = SELECT_SERVER;
+    } else if (dc_strcmp(env, argv[2], "t") == 0) {
+        opts->server_to_run = THREAD_POLL_SERVER;
     }
 
     // Optional truncate csv file

@@ -8,5 +8,6 @@
 int run_normal_server(struct dc_env * env, struct dc_error * error, struct options *opts);
 int run_poll_server(struct dc_env * env, struct dc_error * error, struct options *opts);
 int run_select_server(struct dc_env * env, struct dc_error * error, struct options *opts);
+int run_thread_poll_server(struct dc_env * env, struct dc_error * error, struct options *opts);
 
 #endif //SCALABLE_SERVER_SERVER_H

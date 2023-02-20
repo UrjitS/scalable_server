@@ -5,10 +5,15 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+#define READ_BUFFER_SIZE 1024
+#define CONVERT_TO_MS 1000
+#define BACKLOG SOMAXCONN
+
 enum server_types {
     ONE_TO_ONE,
     POLL_SERVER,
-    SELECT_SERVER
+    SELECT_SERVER,
+    THREAD_POLL_SERVER
 };
 
 struct options

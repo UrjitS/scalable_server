@@ -14,10 +14,6 @@
 #include <string.h>
 #include <time.h>
 
-#define READ_BUFFER_SIZE 1024
-#define CONVERT_TO_MS 1000
-#define BACKLOG 5
-
 static volatile sig_atomic_t running;   // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
 
 static int setup_server(struct dc_env *env, struct dc_error *err, struct options *opts);
