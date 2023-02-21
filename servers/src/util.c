@@ -1,11 +1,11 @@
 #include "util.h"
-#include <stdio.h>
 #include <dc_c/dc_stdlib.h>
 #include <dc_c/dc_string.h>
 #include <dc_posix/dc_unistd.h>
+#include <dc_util/io.h>
 #include <dc_util/system.h>
 #include <dlfcn.h>
-#include <dc_util/io.h>
+#include <stdio.h>
 
 void write_to_file(struct options *opts, const char * server_name, const char * function_name, double time_taken) {
 

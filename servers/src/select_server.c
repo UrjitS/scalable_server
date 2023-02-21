@@ -208,7 +208,7 @@ static void handle_client_data(struct dc_env *env, struct dc_error *err, int *cl
             }
 
             printf("Read from client\n");
-//            dc_write(env, err, STDOUT_FILENO, buffer, bytes_read);
+            dc_write(env, err, STDOUT_FILENO, buffer, bytes_read);
 
 
             printf("Writing to client\n");

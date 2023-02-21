@@ -1,3 +1,5 @@
+#include "server.h"
+#include "util.h"
 #include <dc_c/dc_stdio.h>
 #include <dc_c/dc_stdlib.h>
 #include <dc_c/dc_string.h>
@@ -5,11 +7,11 @@
 #include <dc_posix/dc_poll.h>
 #include <dc_posix/dc_semaphore.h>
 #include <dc_posix/dc_signal.h>
-#include <dc_posix/dc_string.h>
 #include <dc_posix/dc_unistd.h>
 #include <dc_posix/sys/dc_select.h>
 #include <dc_posix/sys/dc_socket.h>
 #include <dc_posix/sys/dc_wait.h>
+#include <dc_util/io.h>
 #include <dc_util/networking.h>
 #include <dc_util/system.h>
 #include <dlfcn.h>
@@ -19,9 +21,6 @@
 #include <sys/poll.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
-#include <dc_util/io.h>
-#include "server.h"
-#include "util.h"
 
 typedef ssize_t (*read_message_func)(const struct dc_env *env, struct dc_error *err, uint8_t **raw_data, int client_socket);
 typedef size_t (*process_message_func)(const struct dc_env *env, struct dc_error *err, const uint8_t *raw_data, uint8_t **processed_data, ssize_t count);
@@ -78,7 +77,6 @@ struct revive_message
 
 
 static void setup_default_settings(const struct dc_env *env, struct dc_error *err, struct settings *default_settings, struct options *opts);
-static void copy_settings(const struct dc_env *env, struct dc_error *err, struct settings *settings, const struct settings *default_settings);
 static void destroy_settings(const struct dc_env *env, struct settings *settings);
 static void parse_args(const struct dc_env *env, struct settings *settings);
 static void sigint_handler(__attribute__((unused)) int signal);
@@ -131,8 +129,6 @@ int run_poll_server(struct dc_env * env, struct dc_error * error, struct options
         dc_env_set_tracer(env, dc_env_default_tracer);
     }
 
-//    destroy_settings(env, default_settings);
-//    dc_free(env, default_settings);
 
     socketpair(AF_UNIX, SOCK_DGRAM, 0, domain_sockets);
     dc_pipe(env, error, pipe_fds);
@@ -175,9 +171,6 @@ int run_poll_server(struct dc_env * env, struct dc_error * error, struct options
 
     destroy_settings(env, default_settings);
     printf("Exiting %d\n", getpid());
-    free(env);
-    dc_error_reset(error);
-    free(error);
     free(default_settings);
     return EXIT_SUCCESS;
 }
@@ -195,21 +188,6 @@ static void setup_default_settings(const struct dc_env *env, struct dc_error *er
     default_settings->debug_server     = false;
     default_settings->debug_handler    = false;
 }
-
-static void copy_settings(const struct dc_env *env, struct dc_error *err, struct settings *settings, const struct settings *default_settings)
-{
-    DC_TRACE(env);
-    settings->interface        = dc_strdup(env, err, default_settings->interface);
-    settings->address          = dc_strdup(env, err, default_settings->address);
-    settings->port             = default_settings->port;
-    settings->backlog          = default_settings->backlog;
-    settings->jobs             = default_settings->jobs;
-    settings->verbose_server   = default_settings->verbose_server;
-    settings->verbose_handler  = default_settings->verbose_handler;
-    settings->debug_server     = default_settings->debug_server;
-    settings->debug_handler    = default_settings->debug_handler;
-}
-
 
 static void destroy_settings(const struct dc_env *env, struct settings *settings)
 {

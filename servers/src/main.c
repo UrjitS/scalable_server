@@ -141,6 +141,9 @@ static int parse_arguments(struct dc_env * env, struct dc_error * error, int arg
         opts->server_to_run = SELECT_SERVER;
     } else if (dc_strcmp(env, argv[2], "t") == 0) {
         opts->server_to_run = THREAD_POLL_SERVER;
+    } else {
+        DC_ERROR_RAISE_USER(error, "Invalid Server Type (o -> one-to-one server, p -> poll server)\n", -1);
+        return -1;
     }
 
     // Optional truncate csv file
